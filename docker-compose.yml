@@ -1,0 +1,96 @@
+version: "2.4"
+
+services:
+  es:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.10.1
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 4
+  db:
+    image: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=registry
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+  registry:
+    image: dockerhub/sunbird-rc-core:v0.0.8-2
+    volumes:
+      - ./schemas:/home/sunbirdrc/config/public/_schemas
+    environment:
+      - connectionInfo_uri=jdbc:postgresql://db:5432/registry
+      - connectionInfo_username=postgres
+      - connectionInfo_password=postgres
+      - elastic_search_connection_url=es:9200
+      - search_provider=dev.sunbirdrc.registry.service.ElasticSearchService
+      - sign_url=http://certificate-signer:8079/sign
+      - signature_enabled=true
+      - authentication_enabled=false
+      - enable_external_templates=true
+      - pdf_url=http://certificate-api:8078/api/v1/certificatePDF
+      - template_base_url=http://registry:8081/api/v1/templates/
+      - async_enabled=true
+      - kafka_bootstrap_address=kafka:9092
+      - webhook_enabled=true
+      - webhook_url=http://localhost:5001/api/v1/callback
+    ports:
+      - "8081:8081"
+    depends_on:
+      es:
+        condition: service_healthy
+      db:
+        condition: service_started
+  certificate-signer:
+    image: dockerhub/sunbird-rc-certificate-signer:v0.0.8
+    environment:
+      - PORT=8079
+    ports:
+      - "8079:8079"
+  certificate-api:
+    image: dockerhub/sunbird-rc-certificate-api:v0.0.8
+    environment:
+      - PORT=8078
+      - QR_TYPE=URL-W3C-VC
+      - CERTIFICATE_DOMAIN_URL=https://dev.sunbirded.org
+    ports:
+      - "8078:8078"
+  callback-service:
+    build: callback-service
+    ports:
+      - "3652:3652"
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: "2181"
+      ZOOKEEPER_TICK_TIME: "2000"
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    depends_on:
+      zookeeper:
+        condition: service_started
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: "1"
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka:9092,OUTSIDE://localhost:9094"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,OUTSIDE:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+    healthcheck:
+      test:
+        [ "CMD", "kafka-topics", "--list", "--zookeeper", "zookeeper:2181" ]
+      interval: 30s
+      timeout: 10s
+      retries: 4
